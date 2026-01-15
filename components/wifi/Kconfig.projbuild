@@ -1,0 +1,19 @@
+menu "WiFi Configuration"
+    config ESP_WIFI_SSID
+        string "WiFi SSID"
+        default "YOUR_WIFI_SSID"
+
+    config ESP_WIFI_PASSWORD
+        string "WiFi Password"
+        default "YOUR_WIFI_PASSWORD"
+endmenu
+
+menu "Local Network Configuration"
+    config UDP_TARGET_IP
+        string "UDP Broadcast Target IP"
+        default "YOUR_TARGET_IP"
+        help
+            - "255.255.255.255": Global Broadcast (Blocked by some Mobile Hotspots).
+            - "192.168.x.255": Subnet Broadcast (Recommended for Hotspots).
+            - "192.168.x.x": Unicast to specific PC (Best stability but static IP needed).
+endmenu
