@@ -1,0 +1,17 @@
+# 忽略构建文件和生成文件
+build/
+sdkconfig
+sdkconfig.old
+*.bin
+*.elf
+*.map
+
+# 忽略IDE和编辑器特定文件
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 忽略编译依赖和下载文件
+managed_components/
+dependencies.lock
