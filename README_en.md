@@ -3,6 +3,7 @@
 [中文](README.md) | [English](README_en.md)
 
 This project is a highly available IoT gateway system developed based on the ESP-IDF v5.5 framework. The system is designed with an event-driven architecture and integrates Huawei Cloud IoTDA access, local LAN bidirectional control, offline breakpoint resumption, and hardware fault self-healing mechanisms. It aims to provide a reference design that can operate stably even in weak network environments and under hardware interference.
+This project is also one of the projects included in my portfolio when applying for jobs.
 
 ## Core Features
 
@@ -12,9 +13,9 @@ This project is a highly available IoT gateway system developed based on the ESP
 * **Lifecycle Management**: Strictly links the MQTT client with network status, eliminating resource leaks and DNS resolution deadlocks in the event of network disconnection.
 
 ### 2. Industrial-grade Reliability Design
-* **I2C Bus Self-healing (Bus Recovery)**: To address the issue of I2C slave deadlock, a 9-pulse recovery sequence and manual STOP signal mechanism have been implemented, and physical layer hard reset is supported.
+* **I2C Bus Self-healing**: To address the issue of I2C slave deadlock, a 9-pulse recovery sequence and manual STOP signal mechanism have been implemented, and physical layer hard reset is supported.
 * **Hardware Fault Isolation**: The OLED display and AHT20 sensor are connected to independent I2C hardware controllers (Port 0/1), ensuring that a single point failure does not affect the main system process.
-* **Smart Watchdog (Task WDT)**: Integrated task-level hardware watchdog, covering all critical business threads, to prevent deadlock.
+* **Smart Watchdog**: Integrated task-level hardware watchdog, covering all critical business threads, to prevent deadlock.
 * **Exponential Backoff for Network Reconnection**: WiFi reconnection uses an exponential backoff algorithm to prevent resource exhaustion during network oscillations.
 
 ### 3. Data Integrity Assurance
@@ -92,6 +93,7 @@ This project provides an upper computer console `ESP_UCP` developed based on **Q
 * Real-time display of temperature and humidity curves and device status.
 * Local issuance of control commands (alarms, threshold settings, network reset).
 * Reception and display of remote debugging logs.
+
 (A new folder has been created.)
 
 ## Version History
