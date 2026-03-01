@@ -1,0 +1,63 @@
+name: ESP32 Firmware Release
+
+# 触发机制：只有当你推送以 'v' 开头的标签时触发 (如 v1.0, v2.3)
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    name: Build Firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      # 拉取代码
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive' # 如果用到了子模块，必须递归拉取
+
+      # 搭建 ESP-IDF 环境并编译
+      # 使用乐鑫官方封装好的 Action
+      - name: Compile Firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1   # 根据你本地的版本修改，保持一致！
+          target: esp32s3           # 或者 esp32s3, esp32c3
+          path: '.'                 # 项目根目录
+          command: 'idf.py build'   # 执行编译命令
+
+      # 3. 合并固件 - 方便用户烧录
+      # ESP-IDF 编译后会分散成三个 bin
+      - name: Merge Binaries
+        run: |
+          # 安装 esptool
+          pip install esptool
+          # 根据你的分区表偏移量修改 (bootloader通常在0x1000, 你的应用通常在0x10000)
+          # 这里仅做演示，实际上你可以直接上传 build 目录下的所有 bin
+          # 简单起见，我们下一步直接打包 build 文件夹里关键的 bin
+
+      # 打包关键文件
+      - name: Archive Artifacts
+        run: |
+          mkdir release_bin
+          cp build/flasher_args.json release_bin/
+          cp build/bootloader/bootloader.bin release_bin/
+          cp build/partition_table/partition-table.bin release_bin/
+          # 假设你的项目名叫 esp_gateway，编译出来就是 esp_gateway.bin
+          # 这里的 *.bin 通配符会自动找到你的主程序
+          cp build/*.bin release_bin/
+          
+          # 压缩一下，方便下载
+          cd release_bin
+          zip -r firmware-${{ github.ref_name }}.zip ./*
+
+      # 发布到 GitHub Releases 页面
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: release_bin/firmware-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # GitHub 自动生成的令牌，无需配置

@@ -1,4 +1,4 @@
-# ESP32-S3 物联网家庭网关- v4.2
+# ESP32-S3 物联网家庭网关
 
 [中文](README.md) | [English](README_en.md)
 

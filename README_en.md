@@ -1,4 +1,4 @@
-# ESP32-S3 IoT Home Gateway - v4.2
+# ESP32-S3 IoT Home Gateway
 
 [中文](README.md) | [English](README_en.md)
 
@@ -8,21 +8,25 @@ This project is also one of the projects included in my portfolio when applying 
 ## Core Features
 
 ### 1. Robust System Architecture
+
 * **Event-Driven Architecture**: The system internally builds a unified message bus through FreeRTOS queues, achieving complete decoupling between business logic controllers and peripheral drivers.
 * **Dual-core Concurrent Scheduling**: Fully leveraging the dual-core feature of ESP32-S3, network communication stacks and sensor sampling tasks are separated to ensure real-time performance.
 * **Lifecycle Management**: Strictly links the MQTT client with network status, eliminating resource leaks and DNS resolution deadlocks in the event of network disconnection.
 
 ### 2. Industrial-grade Reliability Design
+
 * **I2C Bus Self-healing**: To address the issue of I2C slave deadlock, a 9-pulse recovery sequence and manual STOP signal mechanism have been implemented, and physical layer hard reset is supported.
 * **Hardware Fault Isolation**: The OLED display and AHT20 sensor are connected to independent I2C hardware controllers (Port 0/1), ensuring that a single point failure does not affect the main system process.
 * **Smart Watchdog**: Integrated task-level hardware watchdog, covering all critical business threads, to prevent deadlock.
 * **Exponential Backoff for Network Reconnection**: WiFi reconnection uses an exponential backoff algorithm to prevent resource exhaustion during network oscillations.
 
 ### 3. Data Integrity Assurance
+
 * **Offline Resume Transmission**: Based on the SPIFFS file system, local data persistence is achieved. Telemetry data is automatically cached during network interruptions, and traffic shaping synchronization is automatically executed when the network is restored.
 * **Full State Synchronization**: Supports bidirectional synchronization of device shadows (Device Shadow) to ensure real-time consistency of configurations, thresholds, and switch states between the cloud and the local device.
 
 ### 4. Multi-dimensional Interaction Mode
+
 * **Cloud Control**: Supports property reporting, command issuance, and synchronous response of Huawei Cloud IoTDA.
 * **Local Area Network Control**: Equipped with an internal UDP service, it supports device discovery, real-time data broadcasting, and local command control, enabling emergency management in environments without public networks.
 * **Seamless UI Refresh**: Based on the local refresh algorithm of OLED, it eliminates screen flickering during data jumps.
@@ -78,12 +82,12 @@ idf.py build flash monitor
 
 Suggested connection scheme (can be adjusted according to KConfig):
 
-| Module | Signal | ESP32-S3 Pin | Description |
-| :--- | :--- | :--- | :--- |
-| **SSD1306 OLED** | SDA | GPIO 8 | I2C Port 0 |
-| | SCL | GPIO 9 | I2C Port 0 |
-| **AHT20 Sensor** | SDA | GPIO 10 | I2C Port 1 |
-| | SCL | GPIO 11 | I2C Port 1 |
+| Module                 | Signal | ESP32-S3 Pin | Description |
+| :--------------------- | :----- | :----------- | :---------- |
+| **SSD1306 OLED** | SDA    | GPIO 8       | I2C Port 0  |
+|                        | SCL    | GPIO 9       | I2C Port 0  |
+| **AHT20 Sensor** | SDA    | GPIO 10      | I2C Port 1  |
+|                        | SCL    | GPIO 11      | I2C Port 1  |
 
 ## Upper-level Computer Accessories
 
@@ -105,8 +109,8 @@ This project provides an upper computer console `ESP_UCP` developed based on **Q
 
 ---
 
-**License Type**: MIT  
-**Author**: Michael Cookies  
+**License Type**: MIT
+**Author**: Michael Cookies
 
 ## Third-party Components
 
