@@ -40,12 +40,13 @@
 static const char *TAG = "MAIN";
 
 static QueueHandle_t g_system_bus = NULL;
-static sa_bus_t *g_i2c_bus = NULL;
+
+// 双总线对象，独立管理，互不干扰
+static sa_bus_t *g_disp_i2c_bus = NULL;
+static sa_bus_t *g_sensor_i2c_bus = NULL;
 
 static volatile bool g_wifi_connected = false;
 static volatile bool g_mqtt_connected = false;
-
-// 业务任务 1：传感器轮询
 
 static void task_sensor_poll(void *pvParameters) {
     (void)pvParameters;
@@ -74,6 +75,7 @@ static void task_sensor_poll(void *pvParameters) {
             
             if (node->ops.read) {
                 esp_err_t err = node->ops.read(node, &val);
+                // 读写结果闭环更新节点状态
                 sa_mgr_update_node_cache(node, val, (err == ESP_OK));
                 node->last_poll_tick = now;
                 if (err == ESP_OK) data_updated = true;
@@ -89,8 +91,6 @@ static void task_sensor_poll(void *pvParameters) {
     }
 }
 
-// 业务任务 2：OLED 显示
-
 static void task_display_refresh(void *pvParameters) {
     (void)pvParameters;
     char temp_str[32];
@@ -105,10 +105,8 @@ static void task_display_refresh(void *pvParameters) {
             continue;
         }
 
-        // 检查 OLED 是否存活。如果刚才被拔掉，它会被踢下线。
         sa_node_t *oled = sa_mgr_find_node_by_id("oled_display");
         if (!oled || !oled->is_online) {
-            // 如果屏幕离线，不要发任何 I2C 数据，静静等待 recovery daemon 将其救活
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -151,14 +149,40 @@ static void task_display_refresh(void *pvParameters) {
     }
 }
 
+static void task_beep_demo(void *pvParameters) {
+    (void)pvParameters;
+    
+    ESP_LOGI("BEEP_DEMO", "10-second periodic beep task started.");
+    
+    while (1) {
+
+        vTaskDelay(pdMS_TO_TICKS(10000));
+
+        sa_node_t *beep = sa_mgr_find_node_by_id("buzzer_alarm");
+        
+        if (beep && beep->is_online && beep->ops.write) {
+            
+            sa_value_t val_on = { .b_val = true };
+            beep->ops.write(beep, val_on);
+            sa_mgr_update_node_cache(beep, val_on, true);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            sa_value_t val_off = { .b_val = false };
+            beep->ops.write(beep, val_off);
+            sa_mgr_update_node_cache(beep, val_off, true);
+        }
+    }
+}
+
 static void system_event_handler(void* arg, esp_event_base_t event_base, 
                                 int32_t event_id, void* event_data) {
     (void)arg;
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         g_wifi_connected = true;
+        lan_service_set_net_status(true); 
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         g_wifi_connected = false;
         g_mqtt_connected = false;
+        lan_service_set_net_status(false); 
     }
 }
 
@@ -170,36 +194,47 @@ void app_main(void) {
     data_logger_init();
     sa_mgr_init();
 
-    // 初始化 I2C 驱动
-    i2c_master_bus_config_t i2c_mst_config = {
+    // 总线初始化。双总线解耦，使用自动端口分配
+
+    // 初始化 Display I2C 总线
+    i2c_master_bus_config_t disp_i2c_cfg = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = CONFIG_MAIN_I2C_PORT_NUM,
+        .i2c_port = -1,  //设为 -1，让 IDF 自动分配空闲的硬件 I2C 端口
         .scl_io_num = CONFIG_MAIN_I2C_SCL_GPIO,
         .sda_io_num = CONFIG_MAIN_I2C_SDA_GPIO,
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
-    i2c_master_bus_handle_t bus_handle;
-    ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_mst_config, &bus_handle));
+    i2c_master_bus_handle_t disp_bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&disp_i2c_cfg, &disp_bus_handle));
+    g_disp_i2c_bus = sa_bus_i2c_create(disp_bus_handle, "disp_i2c_bus");
 
-    // 包装为 SA-HAL 总线
-    g_i2c_bus = sa_bus_i2c_create(bus_handle, "main_i2c_bus");
-    if (!g_i2c_bus) {
-        ESP_LOGE(TAG, "Failed to create HAL bus");
-        return;
-    }
+    i2c_master_bus_config_t sensor_i2c_cfg = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = -1,
+        .scl_io_num = CONFIG_SENSOR_I2C_SCL_GPIO,
+        .sda_io_num = CONFIG_SENSOR_I2C_SDA_GPIO,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t sensor_bus_handle;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&sensor_i2c_cfg, &sensor_bus_handle));
+    g_sensor_i2c_bus = sa_bus_i2c_create(sensor_bus_handle, "sensor_i2c_bus");
 
-    // 按 Kconfig 静态装载硬件节点
+    // 节点注册区。各找各妈，依赖注入
+
 #if CONFIG_NODE_ENABLE_AHT20
     sa_node_t *temp_node, *humi_node;
-    if (sa_aht20_create_nodes(g_i2c_bus, &temp_node, &humi_node) == ESP_OK) {
+    // 将独立的 sensor_bus 注入给 AHT20
+    if (sa_aht20_create_nodes(g_sensor_i2c_bus, &temp_node, &humi_node) == ESP_OK) {
         sa_mgr_register_node(temp_node);
         sa_mgr_register_node(humi_node);
     }
 #endif
 
 #if CONFIG_NODE_ENABLE_OLED
-    sa_node_t *oled_node = sa_node_oled_create(g_i2c_bus);
+
+    sa_node_t *oled_node = sa_node_oled_create(g_disp_i2c_bus);
     if (oled_node) {
         sa_mgr_register_node(oled_node);
     }
@@ -212,18 +247,19 @@ void app_main(void) {
     }
 #endif
 
-    // 注册无条件依赖的基础测试节点
-    sa_mgr_register_node(sa_mock_temp_create());
-    sa_mgr_register_node(sa_mock_relay_create());
+    // 模拟设备注册区。用于测试和演示，实际项目中可删除或替换为真实设备
+    // sa_mgr_register_node(sa_mock_temp_create());
+    // sa_mgr_register_node(sa_mock_relay_create());
 
-    // 按 Kconfig 启动恢复守护
+    // 恢复守护进程启动。当前只监控了 Display 总线物理复位，Sensor依葫芦画瓢
+
 #if CONFIG_HW_RECOVERY_ENABLE
-    if (hw_recovery_init(g_i2c_bus)) {
+    // 由于业务主要痛点在于 OLED 容易死锁，将 disp_bus 传给自愈中心做硬复位权限
+    if (hw_recovery_init(g_disp_i2c_bus)) {
         hw_recovery_start_daemon();
     }
 #endif
 
-    // 网络和系统服务
     g_system_bus = xQueueCreate(20, sizeof(app_msg_t));
     
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
@@ -235,13 +271,15 @@ void app_main(void) {
     lan_service_init(g_system_bus);
     wifi_init_sta();
 
-    // 启动业务任务
     xTaskCreate(task_sensor_poll, "SensorPoll", 6144, NULL, 5, NULL);
     xTaskCreate(task_display_refresh, "Display", 4096, NULL, 2, NULL);
 
-    ESP_LOGI(TAG, "System architecture initialized successfully.");
+    #if CONFIG_NODE_ENABLE_BEEP
+    xTaskCreate(task_beep_demo, "BeepDemo", 4096, NULL, 2, NULL);
+    #endif
 
-    // 主消息循环
+    ESP_LOGI(TAG, "System architecture initialized successfully. Multi-Bus active.");
+
     app_msg_t msg;
     while (1) {
         if (xQueueReceive(g_system_bus, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {

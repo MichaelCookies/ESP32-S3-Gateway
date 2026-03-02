@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-// 核心管理器接口
+// 核心管理器接口 (生命周期与链表管理)
 
 esp_err_t sa_mgr_init(void);
 esp_err_t sa_mgr_register_node(sa_node_t *node);
@@ -26,7 +26,7 @@ esp_err_t sa_mgr_read_node_cache(sa_node_t *node, sa_value_t *out_val, bool *out
 
 // 设备功能包装
 /**
- * @brief 在显示设备上打印文本，自动屏蔽底层的 ioctl 和驱动结构体
+ * @brief 在显示设备上打印文本 (自动屏蔽底层的 ioctl 和驱动结构体)
  * 
  * @param node_id  设备ID (如 "oled_display")
  * @param page     行/页 (对于 128x64 OLED 通常为 0-7)

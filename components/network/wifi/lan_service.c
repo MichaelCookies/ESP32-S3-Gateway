@@ -64,21 +64,38 @@ static void attach_base_info(cJSON *root) {
 }
 
 static int udp_log_vprintf(const char *fmt, va_list l) {
+    // 必须优先 copy，因为 vprintf 消费后 va_list 会失效
+    va_list l_copy;
+    va_copy(l_copy, l);
+    
+    // 正常终端打印
     int ret = vprintf(fmt, l);
-    if (g_sock < 0 || !g_wifi_has_ip || g_is_logging_active) return ret;
+
+    // 在ISR中绝对不能执行发包和 malloc。如果没有网络，或者正处于重入状态，直接退出。
+    if (xPortInIsrContext() || g_sock < 0 || !g_wifi_has_ip || g_is_logging_active) {
+        va_end(l_copy);
+        return ret;
+    }
 
     g_is_logging_active = true;
-    char buf[512];
-    int len = vsnprintf(buf, sizeof(buf), fmt, l);
-
-    if (len > 0) {
-        struct sockaddr_in dest_addr;
-        memset(&dest_addr, 0, sizeof(dest_addr)); 
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(LAN_SERVICE_PORT);
-        dest_addr.sin_addr.s_addr = inet_addr(BROADCAST_IP);
-        send_raw_packet(&dest_addr, UDP_TYPE_LOG, 0, buf, (uint16_t)len);
+    
+    // 把 512 字节从栈移到堆。这样彻底解放所有调用 ESP_LOG 的任务
+    char *buf = (char *)malloc(512);
+    if (buf) {
+        int len = vsnprintf(buf, 512, fmt, l_copy);
+        
+        if (len > 0) {
+            struct sockaddr_in dest_addr;
+            memset(&dest_addr, 0, sizeof(dest_addr)); 
+            dest_addr.sin_family = AF_INET;
+            dest_addr.sin_port = htons(LAN_SERVICE_PORT);
+            dest_addr.sin_addr.s_addr = inet_addr(BROADCAST_IP);
+            send_raw_packet(&dest_addr, UDP_TYPE_LOG, 0, buf, (uint16_t)len);
+        }
+        free(buf); // 用完释放
     }
+    
+    va_end(l_copy);
     g_is_logging_active = false;
     return ret;
 }
