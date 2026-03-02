@@ -29,6 +29,11 @@ typedef union {
     int32_t i_val;
 } sa_value_t;
 
+// 前向声明
+struct _sa_bus_t;
+struct _sa_node_t;
+
+// 完整定义 sa_bus_t，包含 probe 和 reset
 typedef struct _sa_bus_t {
     const char *bus_name;
     SemaphoreHandle_t bus_mutex;
@@ -36,12 +41,15 @@ typedef struct _sa_bus_t {
     esp_err_t (*init)(struct _sa_bus_t *self);
     esp_err_t (*read_bytes)(struct _sa_bus_t *self, uint8_t addr, uint8_t *data, size_t len);
     esp_err_t (*write_bytes)(struct _sa_bus_t *self, uint8_t addr, const uint8_t *data, size_t len);
+    
+    // 总线级探测与复位，用于硬件恢复模块
+    esp_err_t (*probe)(struct _sa_bus_t *self, uint8_t addr, uint32_t timeout_ms);
+    esp_err_t (*reset)(struct _sa_bus_t *self);
+    
     esp_err_t (*deinit)(struct _sa_bus_t *self);
     
     void *user_ctx;
 } sa_bus_t;
-
-struct _sa_node_t;
 
 typedef struct {
     esp_err_t (*init)(struct _sa_node_t *node);
@@ -56,7 +64,7 @@ typedef struct _sa_node_t {
     sa_node_type_t type;
     sa_val_type_t val_type;
     
-    sa_bus_t *bus;
+    sa_bus_t *bus;              // 关联的总线,可为 NULL，如 GPIO 设备
     sa_node_ops_t ops;
     void *user_ctx;
     
@@ -65,6 +73,8 @@ typedef struct _sa_node_t {
     
     sa_value_t cached_val;
     bool is_online;
+    uint32_t consecutive_errors; // 连续错误计数，用于故障判定
+    
     SemaphoreHandle_t cache_mutex;
     
     struct _sa_node_t *next;

@@ -1,0 +1,14 @@
+menu "State Machine & Recovery"
+
+    menu "Hardware Recovery Daemon"
+        config HW_RECOVERY_ENABLE
+            bool "Enable Hardware Recovery Daemon"
+            default y
+
+        config HW_RECOVERY_CHECK_PERIOD_MS
+            int "Health Check Period (ms)"
+            depends on HW_RECOVERY_ENABLE
+            default 5000
+    endmenu
+
+endmenu

@@ -1,4 +1,3 @@
-// sa_node_aht20.c
 #include <stdlib.h>
 #include <string.h>
 #include "esp_log.h"
@@ -18,15 +17,29 @@ static esp_err_t aht20_hw_init(aht20_shared_ctx_t *ctx) {
     uint8_t status = 0;
     uint8_t cmd_status = 0x71;
     
-    ctx->bus->write_bytes(ctx->bus, AHT20_ADDR, &cmd_status, 1);
+    esp_err_t err = ctx->bus->write_bytes(ctx->bus, AHT20_ADDR, &cmd_status, 1);
+    if (err != ESP_OK) return err;
+    
     vTaskDelay(pdMS_TO_TICKS(10));
-    ctx->bus->read_bytes(ctx->bus, AHT20_ADDR, &status, 1);
+    err = ctx->bus->read_bytes(ctx->bus, AHT20_ADDR, &status, 1);
+    if (err != ESP_OK) return err;
     
     if (!(status & 0x08)) {
         uint8_t init_cmd[] = {0xBE, 0x08, 0x00};
         return ctx->bus->write_bytes(ctx->bus, AHT20_ADDR, init_cmd, 3);
     }
     return ESP_OK;
+}
+
+static esp_err_t aht20_init(sa_node_t *node) {
+    aht20_shared_ctx_t *ctx = (aht20_shared_ctx_t *)node->user_ctx;
+    esp_err_t err = ESP_OK;
+    
+    xSemaphoreTake(ctx->hw_mutex, portMAX_DELAY);
+    err = aht20_hw_init(ctx);
+    xSemaphoreGive(ctx->hw_mutex);
+    
+    return err;
 }
 
 static esp_err_t aht20_sync_read(aht20_shared_ctx_t *ctx) {
@@ -88,8 +101,6 @@ esp_err_t sa_aht20_create_nodes(sa_bus_t *bus, sa_node_t **out_temp_node, sa_nod
     ctx->hw_mutex = xSemaphoreCreateMutex();
     ctx->last_hw_read_tick = 0;
 
-    aht20_hw_init(ctx);
-
     sa_node_t *temp_node = (sa_node_t *)calloc(1, sizeof(sa_node_t));
     temp_node->id = "room_temperature";
     temp_node->type = SA_NODE_SENSOR;
@@ -97,6 +108,7 @@ esp_err_t sa_aht20_create_nodes(sa_bus_t *bus, sa_node_t **out_temp_node, sa_nod
     temp_node->bus = bus;
     temp_node->user_ctx = ctx;
     temp_node->poll_interval_ms = 2000;
+    temp_node->ops.init = aht20_init;
     temp_node->ops.read = aht20_temp_read;
 
     sa_node_t *humi_node = (sa_node_t *)calloc(1, sizeof(sa_node_t));
@@ -106,6 +118,7 @@ esp_err_t sa_aht20_create_nodes(sa_bus_t *bus, sa_node_t **out_temp_node, sa_nod
     humi_node->bus = bus;
     humi_node->user_ctx = ctx;
     humi_node->poll_interval_ms = 2000;
+    humi_node->ops.init = aht20_init;
     humi_node->ops.read = aht20_humi_read;
 
     *out_temp_node = temp_node;

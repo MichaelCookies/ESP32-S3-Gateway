@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include "sdkconfig.h"      // 引入 Kconfig 生成的宏
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -6,10 +7,11 @@
 
 static const char *TAG = "SA_BEEP";
 
-#define BEEP_PIN CONFIG_BEEP_GPIO_PIN
+#define BEEP_PIN CONFIG_NODE_BEEP_GPIO_PIN
 
-#ifdef CONFIG_BEEP_TYPE_ACTIVE
-    #ifdef CONFIG_BEEP_ACTIVE_HIGH
+// 宏定义判断条件与 Kconfig.projbuild 保持严格一致
+#ifdef CONFIG_NODE_BEEP_TYPE_ACTIVE
+    #ifdef CONFIG_NODE_BEEP_ACTIVE_HIGH
         #define BEEP_LEVEL_ON  1
         #define BEEP_LEVEL_OFF 0
     #else
@@ -21,7 +23,7 @@ static const char *TAG = "SA_BEEP";
     #define BEEP_LEDC_MODE        LEDC_LOW_SPEED_MODE
     #define BEEP_LEDC_CHANNEL     LEDC_CHANNEL_0
     #define BEEP_LEDC_DUTY_RES    LEDC_TIMER_13_BIT
-    #define BEEP_LEDC_FREQ_HZ     CONFIG_BEEP_PWM_FREQ_HZ
+    #define BEEP_LEDC_FREQ_HZ     CONFIG_NODE_BEEP_PWM_FREQ_HZ
     #define BEEP_DUTY_50_PERCENT  (4096) 
     #define BEEP_DUTY_OFF         (0)
 #endif
@@ -37,7 +39,7 @@ static esp_err_t beep_init(sa_node_t *node) {
 
     esp_err_t err = ESP_OK;
 
-#ifdef CONFIG_BEEP_TYPE_ACTIVE
+#ifdef CONFIG_NODE_BEEP_TYPE_ACTIVE
     gpio_config_t io_conf = {
         .pin_bit_mask = (1ULL << BEEP_PIN),
         .mode = GPIO_MODE_OUTPUT,
@@ -74,7 +76,14 @@ static esp_err_t beep_init(sa_node_t *node) {
 
     if (err == ESP_OK) {
         ctx->current_state = false;
-        ESP_LOGI(TAG, "Beep hardware initialized (Pin: %d)", BEEP_PIN);
+        ESP_LOGI(TAG, "Beep hardware initialized (Pin: %d, Type: %s)", 
+                 BEEP_PIN, 
+#ifdef CONFIG_NODE_BEEP_TYPE_ACTIVE
+                 "Active"
+#else
+                 "Passive"
+#endif
+                 );
     }
     return err;
 }
@@ -92,7 +101,7 @@ static esp_err_t beep_write(sa_node_t *node, sa_value_t in_val) {
         return ESP_OK;
     }
 
-#ifdef CONFIG_BEEP_TYPE_ACTIVE
+#ifdef CONFIG_NODE_BEEP_TYPE_ACTIVE
     gpio_set_level(BEEP_PIN, target_state ? BEEP_LEVEL_ON : BEEP_LEVEL_OFF);
 #else
     uint32_t duty = target_state ? BEEP_DUTY_50_PERCENT : BEEP_DUTY_OFF;
@@ -111,7 +120,7 @@ static esp_err_t beep_deinit(sa_node_t *node) {
     beep_ctx_t *ctx = (beep_ctx_t *)node->user_ctx;
     if (ctx) {
         xSemaphoreTake(ctx->hw_mutex, portMAX_DELAY);
-#ifdef CONFIG_BEEP_TYPE_ACTIVE
+#ifdef CONFIG_NODE_BEEP_TYPE_ACTIVE
         gpio_set_level(BEEP_PIN, BEEP_LEVEL_OFF);
         gpio_reset_pin(BEEP_PIN);
 #else

@@ -1,0 +1,19 @@
+menu "Main System Configuration"
+    menu "I2C Main Bus Configuration"
+        config MAIN_I2C_PORT_NUM
+            int "Main I2C Port Number"
+            default 0
+
+        config MAIN_I2C_SDA_GPIO
+            int "Main I2C SDA Pin"
+            default 2
+            help
+                Shared SDA pin for all main I2C devices (OLED, AHT20, etc.)
+
+        config MAIN_I2C_SCL_GPIO
+            int "Main I2C SCL Pin"
+            default 1
+            help
+                Shared SCL pin for all main I2C devices (OLED, AHT20, etc.)
+    endmenu
+endmenu
