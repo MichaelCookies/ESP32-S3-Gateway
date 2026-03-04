@@ -16,20 +16,24 @@ static recovery_stats_t g_stats = {0};
 static bool try_recover_node(sa_node_t *node) {
     if (!node || !node->ops.init) return false;
     
-    ESP_LOGI(TAG, "Attempting to recover offline node '%s'...", node->id);
+    ESP_LOGI(TAG, "Attempting to recover offline node '%s' (Attempt %d/5)...", 
+             node->id, node->failed_recovery_count + 1);
     
     esp_err_t err = node->ops.init(node);
-    sa_value_t dummy = {0};
     
     if (err == ESP_OK) {
+        sa_value_t dummy = {0};
         sa_mgr_update_node_cache(node, dummy, true);
+        
+        // 恢复成功，清零熔断计数器
+        node->failed_recovery_count = 0;
+        
         ESP_LOGI(TAG, "Node '%s' recovered successfully!", node->id);
         g_stats.recovery_success++;
         return true;
     } else {
-        ESP_LOGD(TAG, "Node '%s' recovery failed (still disconnected).", node->id);
-        // 复用 SA 架构接口累加连续错误，避免死锁无法触发硬件复位
-        sa_mgr_update_node_cache(node, dummy, false);
+        node->failed_recovery_count++;
+        ESP_LOGD(TAG, "Node '%s' recovery failed.", node->id);
         return false;
     }
 }
@@ -41,45 +45,30 @@ static void recovery_daemon_task(void *pvParameters) {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(CONFIG_HW_RECOVERY_CHECK_PERIOD_MS));
         
-        sa_node_t *offline_nodes[8] = {NULL};
-        int offline_count = 0;
-        int total_consecutive_errors = 0;
-        
         sa_mgr_list_lock();
         sa_node_t *curr = sa_mgr_get_list_head();
+        
         while (curr) {
+            // 只处理离线且具备初始化能力的节点
             if (!curr->is_online && curr->ops.init != NULL) {
-                if (offline_count < 8) {
-                    offline_nodes[offline_count++] = curr;
+                
+                // 尝试超过 5 次放弃
+                if (curr->failed_recovery_count >= 5) {
+                    if (curr->failed_recovery_count == 5) {
+                        ESP_LOGE(TAG, "FATAL: Node '%s' hardware permanently offline. Please force reboot.", curr->id);
+                        // 为了防止疯狂刷屏，把计数器锁死在 6
+                        curr->failed_recovery_count = 6; 
+                    
+                        // 如果 OLED 活着，可以在这里调用 sa_mgr_display_text 提示用户重启，暂时不实现
+                    }
+                } else {
+                    // 没有熔断，继续尝试救活它
+                    try_recover_node(curr);
                 }
             }
-            total_consecutive_errors += curr->consecutive_errors;
             curr = curr->next;
         }
         sa_mgr_list_unlock();
-
-        if (total_consecutive_errors > 20 && g_main_bus && g_main_bus->reset) {
-            ESP_LOGE(TAG, "Too many node errors (%d). Triggering physical I2C Bus Reset!", total_consecutive_errors);
-            g_stats.reset_count++;
-            g_main_bus->reset(g_main_bus);
-            
-            sa_mgr_list_lock();
-            curr = sa_mgr_get_list_head();
-            while(curr) { 
-                if (!curr->is_online) {
-                    curr->consecutive_errors = 0; 
-                }
-                curr = curr->next; 
-            }
-            sa_mgr_list_unlock();
-            
-            vTaskDelay(pdMS_TO_TICKS(500));
-        }
-        
-        for (int i = 0; i < offline_count; i++) {
-            try_recover_node(offline_nodes[i]);
-            vTaskDelay(pdMS_TO_TICKS(200));
-        }
     }
 }
 

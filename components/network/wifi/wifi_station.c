@@ -1,12 +1,3 @@
-/*
- * wifi_station.c
- * 职责：负责 WiFi 连接管理、断线重连策略（指数退避）
- * 最佳实践：
- * - 防御性初始化：兼容外部已初始化 Event Loop 的情况
- * - 健壮的重连算法：避免网络震荡时的资源耗尽
- * - 明确的资源释放：虽然此模块通常伴随系统全生命周期，但逻辑上保持闭环
- */
-
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -28,46 +19,60 @@
 
 //  重连策略配置
 #define MAXIMUM_RETRY  5           // 最大快速重试次数
-#define MAX_BACKOFF_MS 10000       // 最大退避时间 (10秒)
+#define MAX_BACKOFF_MS 10000       // 最大退避时间10秒
 
 static const char *TAG = "wifi_station";
-static int s_retry_num = 0;
+static int s_retry_num = 0; //重试计数
+static int s_cycle_num = 0; //重连周期计数
 
 //  内部逻辑
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
 {
-    //  WiFi 启动 -> 开始连接
+    // WiFi 启动 -> 开始连接
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } 
-    //  WiFi 断开 -> 触发重连策略
+    // WiFi 断开 -> 触发重连策略
     else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_retry_num++;
-        
-        //  指数退避算法: 1s, 2s, 4s, 8s...
-        int delay_ms = 1000 * (1 << (s_retry_num - 1));
-        if (delay_ms > MAX_BACKOFF_MS) {
-            delay_ms = MAX_BACKOFF_MS; // 封顶
+
+        // 防止移位溢出，执行10次一轮回的策略
+        if (s_retry_num > 10) {
+            s_retry_num = 1;
+            s_cycle_num++;
         }
 
-        ESP_LOGW(TAG, "WiFi Disconnected. Reconnecting in %d ms (Attempt %d)...", delay_ms, s_retry_num);
+        // 超过 3 个循环进入系统级网络瘫痪状态，不再自动重连
+        if (s_cycle_num >= 3) {
+            ESP_LOGE(TAG, "FATAL: Network connection failed after 30 attempts. Halting retries. Please reboot or retry via UI.");
+            return; // 放弃重连，直接退出
+        }
         
-        //  阻塞当前任务，等待退避时间
-        //  这会暂时阻塞其他 WiFi 事件的处理，但在断网场景下是合理的
+        // 指数退避算法: 1s, 2s, 4s, 8s...
+        int delay_ms = 1000 * (1 << (s_retry_num - 1));
+        if (delay_ms > MAX_BACKOFF_MS) {
+            delay_ms = MAX_BACKOFF_MS; // 封顶 10 秒
+        }
+
+        ESP_LOGW(TAG, "WiFi Disconnected. Reconnecting in %d ms (Cycle %d, Attempt %d)...", 
+                 delay_ms, s_cycle_num + 1, s_retry_num);
+        
+        // 阻塞当前任务，等待退避时间
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
         
+        // 重新发起连接
         esp_wifi_connect();
-
     } 
-    //  获取 IP -> 连接成功
+    // 获取 IP -> 连接成功
     else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
         
-        s_retry_num = 0; // 重置重试计数器
-
+        // 连接成功，清零所有重试计数器
+        s_retry_num = 0; 
+        s_cycle_num = 0; 
     }
 }
 

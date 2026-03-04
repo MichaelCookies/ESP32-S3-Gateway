@@ -1,19 +1,35 @@
 menu "Main System Configuration"
-    menu "I2C Main Bus Configuration"
+    
+    menu "Display I2C Bus Configuration (I2C0)"
         config MAIN_I2C_PORT_NUM
-            int "Main I2C Port Number"
+            int "Display I2C Port Number"
             default 0
 
         config MAIN_I2C_SDA_GPIO
-            int "Main I2C SDA Pin"
+            int "Display I2C SDA Pin (OLED)"
             default 2
-            help
-                Shared SDA pin for all main I2C devices (OLED, AHT20, etc.)
 
         config MAIN_I2C_SCL_GPIO
-            int "Main I2C SCL Pin"
+            int "Display I2C SCL Pin (OLED)"
             default 1
-            help
-                Shared SCL pin for all main I2C devices (OLED, AHT20, etc.)
     endmenu
+
+    menu "Sensor I2C Bus Configuration (I2C1)"
+        config SENSOR_I2C_PORT_NUM
+            int "Sensor I2C Port Number"
+            default 1
+
+        config SENSOR_I2C_SDA_GPIO
+            int "Sensor I2C SDA Pin (AHT20)"
+            default 4
+            help
+                Separate SDA pin for sensors to avoid breadboard wire splicing.
+
+        config SENSOR_I2C_SCL_GPIO
+            int "Sensor I2C SCL Pin (AHT20)"
+            default 5
+            help
+                Separate SCL pin for sensors to avoid breadboard wire splicing.
+    endmenu
+
 endmenu

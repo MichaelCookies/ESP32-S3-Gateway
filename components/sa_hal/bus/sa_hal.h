@@ -74,6 +74,7 @@ typedef struct _sa_node_t {
     sa_value_t cached_val;
     bool is_online;
     uint32_t consecutive_errors; // 连续错误计数，用于故障判定
+    uint8_t failed_recovery_count; // 连续自愈失败计数
     
     SemaphoreHandle_t cache_mutex;
     

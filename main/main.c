@@ -22,6 +22,8 @@
 #include "sa_hal.h"
 #include "sa_bus_i2c.h"
 #include "sa_device_manager.h"
+#include "sa_mock_device.h"
+#include "smart_scene_engine.h"
 
 #if CONFIG_NODE_ENABLE_AHT20
 #include "sa_node_aht20.h"
@@ -35,13 +37,9 @@
 #include "sa_node_beep.h"
 #endif
 
-#include "sa_mock_device.h"
-
 static const char *TAG = "MAIN";
 
 static QueueHandle_t g_system_bus = NULL;
-
-// 双总线对象，独立管理，互不干扰
 static sa_bus_t *g_disp_i2c_bus = NULL;
 static sa_bus_t *g_sensor_i2c_bus = NULL;
 
@@ -75,7 +73,6 @@ static void task_sensor_poll(void *pvParameters) {
             
             if (node->ops.read) {
                 esp_err_t err = node->ops.read(node, &val);
-                // 读写结果闭环更新节点状态
                 sa_mgr_update_node_cache(node, val, (err == ESP_OK));
                 node->last_poll_tick = now;
                 if (err == ESP_OK) data_updated = true;
@@ -149,40 +146,20 @@ static void task_display_refresh(void *pvParameters) {
     }
 }
 
-static void task_beep_demo(void *pvParameters) {
-    (void)pvParameters;
-    
-    ESP_LOGI("BEEP_DEMO", "10-second periodic beep task started.");
-    
-    while (1) {
-
-        vTaskDelay(pdMS_TO_TICKS(10000));
-
-        sa_node_t *beep = sa_mgr_find_node_by_id("buzzer_alarm");
-        
-        if (beep && beep->is_online && beep->ops.write) {
-            
-            sa_value_t val_on = { .b_val = true };
-            beep->ops.write(beep, val_on);
-            sa_mgr_update_node_cache(beep, val_on, true);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            sa_value_t val_off = { .b_val = false };
-            beep->ops.write(beep, val_off);
-            sa_mgr_update_node_cache(beep, val_off, true);
-        }
-    }
-}
-
 static void system_event_handler(void* arg, esp_event_base_t event_base, 
                                 int32_t event_id, void* event_data) {
     (void)arg;
     if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         g_wifi_connected = true;
-        lan_service_set_net_status(true); 
+        lan_service_set_net_status(true);
+        ESP_LOGI(TAG, "Network is UP. Starting Cloud Services...");
+        mqtt_huawei_start();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         g_wifi_connected = false;
         g_mqtt_connected = false;
-        lan_service_set_net_status(false); 
+        lan_service_set_net_status(false);
+        ESP_LOGW(TAG, "Network is DOWN. Stopping Cloud Services...");
+        mqtt_huawei_stop();
     }
 }
 
@@ -194,14 +171,11 @@ void app_main(void) {
     data_logger_init();
     sa_mgr_init();
 
-    // 总线初始化。双总线解耦，使用自动端口分配
-
-    // 初始化 Display I2C 总线
     i2c_master_bus_config_t disp_i2c_cfg = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
-        .i2c_port = -1,  //设为 -1，让 IDF 自动分配空闲的硬件 I2C 端口
-        .scl_io_num = CONFIG_MAIN_I2C_SCL_GPIO,
-        .sda_io_num = CONFIG_MAIN_I2C_SDA_GPIO,
+        .i2c_port = -1,
+        .scl_io_num = CONFIG_Display_I2C_SCL_GPIO,
+        .sda_io_num = CONFIG_Display_I2C_SDA_GPIO,
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
@@ -221,11 +195,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(i2c_new_master_bus(&sensor_i2c_cfg, &sensor_bus_handle));
     g_sensor_i2c_bus = sa_bus_i2c_create(sensor_bus_handle, "sensor_i2c_bus");
 
-    // 节点注册区。各找各妈，依赖注入
-
 #if CONFIG_NODE_ENABLE_AHT20
     sa_node_t *temp_node, *humi_node;
-    // 将独立的 sensor_bus 注入给 AHT20
     if (sa_aht20_create_nodes(g_sensor_i2c_bus, &temp_node, &humi_node) == ESP_OK) {
         sa_mgr_register_node(temp_node);
         sa_mgr_register_node(humi_node);
@@ -233,7 +204,6 @@ void app_main(void) {
 #endif
 
 #if CONFIG_NODE_ENABLE_OLED
-
     sa_node_t *oled_node = sa_node_oled_create(g_disp_i2c_bus);
     if (oled_node) {
         sa_mgr_register_node(oled_node);
@@ -247,18 +217,15 @@ void app_main(void) {
     }
 #endif
 
-    // 模拟设备注册区。用于测试和演示，实际项目中可删除或替换为真实设备
-    // sa_mgr_register_node(sa_mock_temp_create());
-    // sa_mgr_register_node(sa_mock_relay_create());
-
-    // 恢复守护进程启动。当前只监控了 Display 总线物理复位，Sensor依葫芦画瓢
-
 #if CONFIG_HW_RECOVERY_ENABLE
-    // 由于业务主要痛点在于 OLED 容易死锁，将 disp_bus 传给自愈中心做硬复位权限
     if (hw_recovery_init(g_disp_i2c_bus)) {
         hw_recovery_start_daemon();
     }
 #endif
+
+    sa_mgr_register_node(sa_mock_relay_create());
+    sa_mgr_register_node(sa_mock_lux_create());
+    sa_mgr_register_node(sa_mock_pressure_create());
 
     g_system_bus = xQueueCreate(20, sizeof(app_msg_t));
     
@@ -273,10 +240,7 @@ void app_main(void) {
 
     xTaskCreate(task_sensor_poll, "SensorPoll", 6144, NULL, 5, NULL);
     xTaskCreate(task_display_refresh, "Display", 4096, NULL, 2, NULL);
-
-    #if CONFIG_NODE_ENABLE_BEEP
-    xTaskCreate(task_beep_demo, "BeepDemo", 4096, NULL, 2, NULL);
-    #endif
+    smart_scene_engine_start();
 
     ESP_LOGI(TAG, "System architecture initialized successfully. Multi-Bus active.");
 
@@ -285,6 +249,47 @@ void app_main(void) {
         if (xQueueReceive(g_system_bus, &msg, pdMS_TO_TICKS(1000)) == pdTRUE) {
             if (msg.type == MSG_TYPE_MQTT_EVT) {
                 g_mqtt_connected = (msg.payload.mqtt_evt == MQTT_EVT_CONNECTED);
+                if (g_mqtt_connected) {
+                    ESP_LOGI(TAG, "Huawei Cloud MQTT Connected successfully!");
+                    mqtt_huawei_report_state(
+                        settings_get_threshold(), 
+                        settings_get_mode(), 
+                        settings_get_display_enabled(), 
+                        settings_get_sensor_enabled()
+                    );
+                } else {
+                    ESP_LOGW(TAG, "Huawei Cloud MQTT Disconnected!");
+                }
+            } else if (msg.type == MSG_TYPE_LOCAL_CMD) {
+                switch (msg.payload.cmd_data.cmd) {
+                    case CMD_CLOUD_SWITCH:
+                        settings_set_cloud_enabled(msg.payload.cmd_data.val_bool);
+                        ESP_LOGI(TAG, "Cloud switch toggled: %s", msg.payload.cmd_data.val_bool ? "ON" : "OFF");
+                        if (msg.payload.cmd_data.val_bool) {
+                            if (g_wifi_connected) mqtt_huawei_start();
+                        } else {
+                            mqtt_huawei_stop();
+                            g_mqtt_connected = false;
+                        }
+                        break;
+                    case CMD_NET_RESET:
+                        ESP_LOGW(TAG, "Manual Network Reset Triggered!");
+                        wifi_force_reset();
+                        break;
+                    case CMD_SET_THRESHOLD:
+                        settings_set_threshold(msg.payload.cmd_data.val_float);
+                        break;
+                    case CMD_ACTUATOR_CTRL:
+                        safe_set_actuator(msg.payload.cmd_data.target_id, msg.payload.cmd_data.val_bool);
+                        break;
+                    default:
+                        break;
+                }
+            } else if (msg.type == MSG_TYPE_CLOUD_CMD) {
+                ESP_LOGI(TAG, "Received command from Huawei Cloud!");
+                if (msg.payload.cmd_data.cmd == CMD_SET_THRESHOLD) {
+                    settings_set_threshold(msg.payload.cmd_data.val_float);
+                }
             }
         }
     }

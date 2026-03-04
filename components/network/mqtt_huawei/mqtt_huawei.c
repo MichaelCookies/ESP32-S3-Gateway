@@ -26,19 +26,60 @@ static QueueHandle_t g_system_bus = NULL;
 #define TOPIC_CMD_RESP_FMT  "$oc/devices/" CONFIG_HWC_DEVICE_ID "/sys/commands/response/request_id=%.*s"
 #define TOPIC_PROP_REPORT   "$oc/devices/" CONFIG_HWC_DEVICE_ID "/sys/properties/report"
 
+typedef void (*mqtt_cmd_handler_t)(cJSON *paras, app_msg_t *msg, bool *send_to_bus);
+
+typedef struct {
+    const char *cmd_name;
+    mqtt_cmd_handler_t handler;
+} mqtt_cmd_route_t;
+
 static void log_error_if_nonzero(const char *message, int error_code) {
     if (error_code != 0) ESP_LOGE(TAG, "Last error %s: 0x%x", message, error_code);
 }
 
 static void send_command_response(esp_mqtt_client_handle_t client_handle, const char *request_id, int id_len) {
     if (client_handle == NULL) return;
-    
     char topic[128];
     snprintf(topic, sizeof(topic), TOPIC_CMD_RESP_FMT, id_len, request_id);
     const char *payload = "{\"result_code\":0,\"response_name\":\"COMMAND_RESPONSE\",\"paras\":{\"result\":\"success\"}}";
-    
     esp_mqtt_client_publish(client_handle, topic, payload, 0, 0, 0);
 }
+
+static void handle_cmd_alarm(cJSON *paras, app_msg_t *msg, bool *send_to_bus) {
+    cJSON *status = cJSON_GetObjectItem(paras, "status");
+    if (cJSON_IsString(status)) {
+        msg->payload.cmd_data.cmd = CMD_ACTUATOR_CTRL;
+        strncpy(msg->payload.cmd_data.target_id, "buzzer_alarm", sizeof(msg->payload.cmd_data.target_id) - 1);
+        msg->payload.cmd_data.val_bool = (strcmp(status->valuestring, "ON") == 0);
+        *send_to_bus = true;
+    }
+}
+
+static void handle_cmd_threshold(cJSON *paras, app_msg_t *msg, bool *send_to_bus) {
+    cJSON *val = cJSON_GetObjectItem(paras, "value");
+    if (cJSON_IsNumber(val)) { 
+        msg->payload.cmd_data.cmd = CMD_SET_THRESHOLD;
+        msg->payload.cmd_data.val_float = (float)val->valuedouble;
+        *send_to_bus = true; 
+    }
+}
+
+static void handle_cmd_actuator(cJSON *paras, app_msg_t *msg, bool *send_to_bus) {
+    cJSON *target = cJSON_GetObjectItem(paras, "target_id");
+    cJSON *val = cJSON_GetObjectItem(paras, "value");
+    if (cJSON_IsString(target) && (cJSON_IsBool(val) || cJSON_IsNumber(val))) {
+        msg->payload.cmd_data.cmd = CMD_ACTUATOR_CTRL;
+        strncpy(msg->payload.cmd_data.target_id, target->valuestring, sizeof(msg->payload.cmd_data.target_id) - 1);
+        msg->payload.cmd_data.val_bool = cJSON_IsTrue(val) || (cJSON_IsNumber(val) && val->valueint > 0);
+        *send_to_bus = true;
+    }
+}
+
+static const mqtt_cmd_route_t s_cmd_routes[] = {
+    {"Control_Alarm", handle_cmd_alarm},
+    {"Set_Threshold", handle_cmd_threshold},
+    {"Control_Actuator", handle_cmd_actuator}
+};
 
 static void handle_mqtt_data(esp_mqtt_event_handle_t event) {
     const char *p_req = strstr(event->topic, "request_id=");
@@ -61,35 +102,13 @@ static void handle_mqtt_data(esp_mqtt_event_handle_t event) {
             msg.type = MSG_TYPE_CLOUD_CMD;
             bool send_to_bus = false;
 
-            if (strcmp(cmd_name->valuestring, "Control_Alarm") == 0) {
-                cJSON *status = cJSON_GetObjectItem(paras, "status");
-                if (cJSON_IsString(status)) {
-                    msg.payload.cmd_data.cmd = CMD_ALARM_CTRL;
-                    msg.payload.cmd_data.val_bool = (strcmp(status->valuestring, "ON") == 0);
-                    send_to_bus = true;
-                }
-            } else if (strcmp(cmd_name->valuestring, "Set_Threshold") == 0) {
-                cJSON *val = cJSON_GetObjectItem(paras, "value");
-                if (cJSON_IsNumber(val)) { 
-                    msg.payload.cmd_data.cmd = CMD_SET_THRESHOLD;
-                    msg.payload.cmd_data.val_float = (float)val->valuedouble;
-                    send_to_bus = true; 
-                }
-            } else if (strcmp(cmd_name->valuestring, "Control_Sensor") == 0) {
-                cJSON *status = cJSON_GetObjectItem(paras, "status");
-                if (cJSON_IsString(status)) {
-                    msg.payload.cmd_data.cmd = CMD_SENSOR_SWITCH;
-                    msg.payload.cmd_data.val_bool = (strcmp(status->valuestring, "ON") == 0);
-                    send_to_bus = true;
-                }
-            } else if (strcmp(cmd_name->valuestring, "Control_Actuator") == 0) {
-                cJSON *target = cJSON_GetObjectItem(paras, "target_id");
-                cJSON *val = cJSON_GetObjectItem(paras, "value");
-                if (cJSON_IsString(target) && (cJSON_IsBool(val) || cJSON_IsNumber(val))) {
-                    msg.payload.cmd_data.cmd = CMD_ACTUATOR_CTRL;
-                    strncpy(msg.payload.cmd_data.target_id, target->valuestring, sizeof(msg.payload.cmd_data.target_id) - 1);
-                    msg.payload.cmd_data.val_bool = cJSON_IsTrue(val) || (cJSON_IsNumber(val) && val->valueint > 0);
-                    send_to_bus = true;
+            size_t route_count = sizeof(s_cmd_routes) / sizeof(s_cmd_routes[0]);
+            for (size_t i = 0; i < route_count; i++) {
+                if (strcmp(cmd_name->valuestring, s_cmd_routes[i].cmd_name) == 0) {
+                    if (s_cmd_routes[i].handler) {
+                        s_cmd_routes[i].handler(paras, &msg, &send_to_bus);
+                    }
+                    break;
                 }
             }
 
@@ -187,7 +206,7 @@ void mqtt_huawei_publish_sensors(void) {
     while (curr) {
         sa_value_t val;
         bool is_online;
-        if (sa_mgr_read_node_cache(curr, &val, &is_online) == ESP_OK && is_online) {
+        if (curr->type == SA_NODE_SENSOR && sa_mgr_read_node_cache(curr, &val, &is_online) == ESP_OK && is_online) {
             if (curr->val_type == SA_VAL_TYPE_FLOAT) {
                 cJSON_AddNumberToObject(properties_obj, curr->id, val.f_val);
                 has_data = true;

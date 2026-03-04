@@ -60,7 +60,7 @@ static void attach_base_info(cJSON *root) {
     snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", 
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     cJSON_AddStringToObject(root, "mac", mac_str);
-    cJSON_AddStringToObject(root, "name", "Virtual Lab Gateway");
+    cJSON_AddStringToObject(root, "name", "家庭智能网关系统V5");
 }
 
 static int udp_log_vprintf(const char *fmt, va_list l) {
@@ -168,22 +168,17 @@ static void handle_control_command(struct sockaddr_in *source_addr, uint16_t seq
             msg.type = MSG_TYPE_LOCAL_CMD; 
             bool valid = true;
 
-            if (strcmp(item_cmd->valuestring, "alarm") == 0) {
-                msg.payload.cmd_data.cmd = CMD_ALARM_CTRL;
-                msg.payload.cmd_data.val_bool = cJSON_IsTrue(item_val);
-            } else if (strcmp(item_cmd->valuestring, "threshold") == 0) {
-                msg.payload.cmd_data.cmd = CMD_SET_THRESHOLD;
-                msg.payload.cmd_data.val_float = (float)item_val->valuedouble;
-            } else if (strcmp(item_cmd->valuestring, "sensor_sw") == 0) {
-                msg.payload.cmd_data.cmd = CMD_SENSOR_SWITCH;
-                msg.payload.cmd_data.val_bool = cJSON_IsTrue(item_val);
-            } else if (strcmp(item_cmd->valuestring, "net_reset") == 0) {
-                msg.payload.cmd_data.cmd = CMD_NET_RESET;
-            } else {
-                msg.payload.cmd_data.cmd = CMD_ACTUATOR_CTRL;
-                strncpy(msg.payload.cmd_data.target_id, item_cmd->valuestring, sizeof(msg.payload.cmd_data.target_id) - 1);
-                msg.payload.cmd_data.val_bool = cJSON_IsTrue(item_val) || (cJSON_IsNumber(item_val) && item_val->valueint > 0);
-            }
+            if (strcmp(item_cmd->valuestring, "threshold") == 0) {
+                        msg.payload.cmd_data.cmd = CMD_SET_THRESHOLD;
+                        msg.payload.cmd_data.val_float = (float)item_val->valuedouble;
+                    } else if (strcmp(item_cmd->valuestring, "net_reset") == 0) {
+                        msg.payload.cmd_data.cmd = CMD_NET_RESET;
+                    } else {
+                        // 所有设备控制
+                        msg.payload.cmd_data.cmd = CMD_ACTUATOR_CTRL;
+                        strncpy(msg.payload.cmd_data.target_id, item_cmd->valuestring, sizeof(msg.payload.cmd_data.target_id) - 1);
+                        msg.payload.cmd_data.val_bool = cJSON_IsTrue(item_val) || (cJSON_IsNumber(item_val) && item_val->valueint > 0);
+                    }
 
             if (valid && g_internal_bus_handle) {
                 xQueueSend(g_internal_bus_handle, &msg, 0);
@@ -280,10 +275,10 @@ void lan_service_broadcast_data(void) {
     while (curr) {
         sa_value_t val; bool is_online;
         if (sa_mgr_read_node_cache(curr, &val, &is_online) == ESP_OK && is_online) {
-            // 【关键修复】只向数据看板推送 SENSOR，不要把继电器推上去当传感器显示！
+            // 只向数据看板推送SENSOR，不把执行器推送上去。
             if (curr->type == SA_NODE_SENSOR) {
                 if (curr->val_type == SA_VAL_TYPE_FLOAT) {
-                    // 【关键修复】截断到1位小数，防止 Qt UI 太丑
+                    //截断到1位小数，防止 Qt端 UI 太丑
                     float clean_f = roundf(val.f_val * 10.0f) / 10.0f;
                     cJSON_AddNumberToObject(data_obj, curr->id, clean_f);
                     has_data = true;
@@ -310,7 +305,7 @@ void lan_service_broadcast_data(void) {
     char *json_out = cJSON_PrintUnformatted(root);
     if (json_out) {
         struct sockaddr_in dest_addr;
-        memset(&dest_addr, 0, sizeof(dest_addr)); // 【关键修复】清零 sin_zero 填充区，防止 Windows 防火墙丢包！
+        memset(&dest_addr, 0, sizeof(dest_addr)); // 清零 sin_zero 填充区，防止 Windows 防火墙丢包
         dest_addr.sin_family = AF_INET;
         dest_addr.sin_port = htons(LAN_SERVICE_PORT);
         dest_addr.sin_addr.s_addr = inet_addr(BROADCAST_IP);

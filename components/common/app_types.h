@@ -16,13 +16,11 @@ typedef enum {
 } sys_mode_t;
 
 typedef enum {
-    CMD_ALARM_CTRL = 0,
+    CMD_SYS_MODE_SET = 0,
     CMD_SET_THRESHOLD,
-    CMD_SENSOR_SWITCH,
-    CMD_DISPLAY_SWITCH,
-    CMD_NET_RESET,
     CMD_CLOUD_SWITCH,
-    CMD_ACTUATOR_CTRL  
+    CMD_NET_RESET,
+    CMD_ACTUATOR_CTRL
 } sys_cmd_t;
 
 typedef enum {
@@ -42,18 +40,16 @@ typedef struct {
     msg_type_t type;
     union {
         int error_code; 
-        
         mqtt_evt_type_t mqtt_evt;
-        
         struct {
             sys_cmd_t cmd;
             union {
                 bool val_bool;
                 float val_float;
+                sys_mode_t val_mode;
             };
             char target_id[32]; 
         } cmd_data;
-        
     } payload;
 } app_msg_t;
 
